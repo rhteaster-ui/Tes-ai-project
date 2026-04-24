@@ -92,6 +92,61 @@
             animation: wipe-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             will-change: clip-path, transform;
         }
+        .message-content {
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+        .message-content pre {
+            overflow-x: auto;
+            white-space: pre;
+            max-width: 100%;
+            width: 100%;
+        }
+        .message-content .code-block-wrapper {
+            max-width: 100%;
+            overflow: hidden;
+            border-radius: 0.75rem;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            margin: 1rem 0;
+        }
+        .message-content .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.45rem 0.65rem;
+            background: rgba(15, 23, 42, 0.92);
+            color: #cbd5e1;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+            font-size: 0.72rem;
+            letter-spacing: 0.03em;
+        }
+        .message-content .code-header button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #cbd5e1;
+            border-radius: 0.4rem;
+            padding: 0.25rem;
+            transition: all 0.2s ease;
+        }
+        .message-content .code-header button:hover {
+            background: rgba(148, 163, 184, 0.2);
+            color: #fff;
+        }
+        .message-content .code-scroll {
+            overflow-x: auto;
+            max-width: 100%;
+            background: #0f172a;
+        }
+        .message-content .code-scroll pre {
+            margin: 0;
+            padding: 0.8rem 0.95rem;
+            min-width: 100%;
+            width: max-content;
+            background: transparent;
+            color: #e2e8f0;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-darkbg text-slate-900 dark:text-gray-100 antialiased h-screen overflow-hidden flex">
@@ -300,8 +355,8 @@
         <button onclick="selectModel('Gemini 2.5 Flash')" data-model-option="Gemini 2.5 Flash" class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium text-sm">
             Gemini 2.5 Flash
         </button>
-        <button onclick="selectModel('ChatGPT')" data-model-option="ChatGPT" class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium text-sm">
-            ChatGPT
+        <button onclick="selectModel('GPT')" data-model-option="GPT" class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium text-sm">
+            GPT
         </button>
         <button onclick="selectModel('DeepSeek')" data-model-option="DeepSeek" class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium text-sm">
             DeepSeek
@@ -652,7 +707,8 @@
             if (modelPopupContext.source === 'response' && modelPopupContext.targetBtn) {
                 regenerateResponse(modelPopupContext.targetBtn, { forceModelLabel: modelName });
             } else {
-                showToast(`Model aktif: ${modelName}`);
+                const backendText = modelName.toLowerCase().includes('gpt') ? 'Backend GPT aktif.' : `Model aktif: ${modelName}`;
+                showToast(backendText);
             }
             closeModelPopup();
         };
@@ -731,14 +787,13 @@
                 document.body.removeChild(textArea);
             }
 
-            const originalText = btn.textContent;
-            btn.textContent = 'Tersalin';
-            btn.classList.add('text-green-500');
+            btn.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-green-400"></i>';
+            lucide.createIcons();
             showToast("Kode berhasil disalin.");
             setTimeout(() => {
-                btn.textContent = originalText;
-                btn.classList.remove('text-green-500');
-            }, 1100);
+                btn.innerHTML = '<i data-lucide="copy" class="w-3.5 h-3.5"></i>';
+                lucide.createIcons();
+            }, 900);
         };
 
         // ----------------------------------------------------
@@ -783,9 +838,9 @@
             sendBtn.disabled = true;
             isGenerating = true;
 
-            const responseText = await fetchGeminiResponse(lastPrompt, lastImageBase64, lastMimeType);
-            const renderedText = options.forceModelLabel && options.forceModelLabel !== 'Gemini 2.5 Flash'
-                ? `🧪 Simulasi model ${options.forceModelLabel} (backend tetap Gemini).\n\n${responseText}`
+            const responseText = await fetchAIResponse(lastPrompt, lastImageBase64, lastMimeType);
+            const renderedText = options.forceModelLabel && !['Gemini 2.5 Flash', 'GPT'].includes(options.forceModelLabel)
+                ? `🧪 Simulasi model ${options.forceModelLabel} (backend fallback saat ini).\n\n${responseText}`
                 : responseText;
             
             document.getElementById(typingId).remove();
@@ -886,7 +941,6 @@
         // ----------------------------------------------------
         // LOGIKA CHAT & LLM INTEGRATION
         // ----------------------------------------------------
-        const selectedModelId = "gemini-2.5-flash";
         const chatInput = document.getElementById('chatInput');
         const sendBtn = document.getElementById('sendBtn');
         const chatMessages = document.getElementById('chatMessages');
@@ -1116,11 +1170,15 @@
 
                 htmlParts.push(`
                     <div class="code-block-wrapper my-4 rounded-xl overflow-hidden border border-slate-200 dark:border-white/10">
-                        <div class="flex items-center justify-between px-3 py-2 bg-slate-100 dark:bg-white/5 text-xs">
+                        <div class="code-header">
                             <span class="font-semibold uppercase text-slate-500 dark:text-slate-400">${languageLabel}</span>
-                            <button onclick="copyCodeBlock(this)" class="text-slate-500 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors font-medium">Salin kode</button>
+                            <button onclick="copyCodeBlock(this)" title="Salin kode">
+                                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            </button>
                         </div>
-                        <pre class="m-0 px-3 py-3 bg-slate-900 text-slate-100 text-[13px] overflow-x-auto"><code>${codeText || '// (kosong)'}</code></pre>
+                        <div class="code-scroll">
+                            <pre><code>${codeText || '// (kosong)'}</code></pre>
+                        </div>
                     </div>
                 `);
             });
@@ -1167,24 +1225,31 @@
             if (latestMessage) {
                 await animateAIMessage(latestMessage, text || '');
             }
+            lucide.createIcons();
             scrollToBottom();
         }
 
-        async function fetchGeminiResponse(prompt, imageBase64, mimeType) {
+        function getActiveBackend() {
+            if (activeModelLabel.toLowerCase().includes('gpt')) return { endpoint: '/api/gpt', model: 'chatgpt-web' };
+            return { endpoint: '/api/chat', model: 'gemini-2.5-flash' };
+        }
+
+        async function fetchAIResponse(prompt, imageBase64, mimeType) {
+            const { endpoint, model } = getActiveBackend();
             try {
                 const images = [];
                 if (imageBase64) {
                     images.push(`data:${mimeType || 'image/jpeg'};base64,${imageBase64}`);
                 }
 
-                const response = await fetch('/api/chat', {
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         prompt,
                         images,
                         history: conversationHistory.slice(-MAX_HISTORY_MESSAGES),
-                        model: selectedModelId,
+                        model,
                         mode: 'chat'
                     })
                 });
@@ -1210,6 +1275,7 @@
         async function handleSend() {
             const text = chatInput.value.trim();
             if (!text && !attachedFile) return;
+            if (isGenerating) return;
 
             const currentFile = attachedFile;
             const currentBase64 = base64Image;
@@ -1245,7 +1311,7 @@
             sendBtn.disabled = true;
             isGenerating = true;
 
-            const responseText = await fetchGeminiResponse(text, currentBase64, currentMime);
+            const responseText = await fetchAIResponse(text, currentBase64, currentMime);
             
             document.getElementById(typingId).remove();
             await appendAIMessage(responseText);
