@@ -92,6 +92,82 @@
             animation: wipe-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             will-change: clip-path, transform;
         }
+
+        .message-content pre {
+            overflow-x: auto;
+            white-space: pre;
+            max-width: 100%;
+            background: rgba(15, 23, 42, 0.9);
+            color: #e2e8f0;
+            border-radius: 0.75rem;
+            padding: 0.85rem 1rem;
+            margin: 0.9rem 0;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+        .message-content code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9em;
+        }
+        .typing-cursor {
+            display: inline-block;
+            width: 0.5ch;
+            animation: pulse-ring 1s ease-in-out infinite;
+            opacity: 0.7;
+        }
+        .message-content {
+            overflow-x: hidden;
+        }
+        .message-content p,
+        .message-content li {
+            overflow-wrap: anywhere;
+        }
+        .code-block-shell {
+            max-width: 100%;
+            overflow: hidden;
+            border-radius: 0.85rem;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(15, 23, 42, 0.92);
+            margin: 0.9rem 0;
+        }
+        .code-block-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            padding: 0.45rem 0.65rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(2, 6, 23, 0.9);
+            font-size: 11px;
+            color: #cbd5e1;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .code-block-copy-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #cbd5e1;
+            background: transparent;
+            transition: all .2s ease;
+        }
+        .code-block-copy-btn:hover {
+            background: rgba(148, 163, 184, 0.18);
+            color: #f8fafc;
+        }
+        .code-scroll-wrap {
+            overflow-x: auto;
+            overflow-y: hidden;
+            max-width: 100%;
+        }
+        .code-scroll-wrap pre {
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+            min-width: max-content;
+        }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-darkbg text-slate-900 dark:text-gray-100 antialiased h-screen overflow-hidden flex">
@@ -599,7 +675,8 @@
             lastPrompt = "";
             lastImageBase64 = null;
             lastMimeType = null;
-            historyAddedThisSession = false; 
+            historyAddedThisSession = false;
+            conversationHistory.length = 0;
 
             showToast("Obrolan berhasil dibersihkan & dimulai ulang.");
             
@@ -708,6 +785,41 @@
             }, 1200);
         };
 
+        window.copyCodeBlock = async function(btn) {
+            const shell = btn.closest('.code-block-shell');
+            const code = shell?.querySelector('code');
+            const content = (code?.innerText || '').trim();
+            if (!content) {
+                showToast("Kode tidak ditemukan.");
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(content);
+            } catch (_) {
+                const textArea = document.createElement("textarea");
+                textArea.value = content;
+                textArea.style.position = "fixed";
+                textArea.style.top = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            }
+
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.setAttribute('data-lucide', 'check');
+                lucide.createIcons();
+                setTimeout(() => {
+                    icon.setAttribute('data-lucide', 'copy');
+                    lucide.createIcons();
+                }, 900);
+            }
+            showToast("Kode berhasil disalin.");
+        };
+
         // ----------------------------------------------------
         // LOGIKA EDIT TEKS PENGGUNA
         // ----------------------------------------------------
@@ -750,13 +862,13 @@
             sendBtn.disabled = true;
             isGenerating = true;
 
-            const responseText = await fetchGeminiResponse(lastPrompt, lastImageBase64, lastMimeType);
-            const renderedText = options.forceModelLabel && options.forceModelLabel !== 'Gemini 2.5 Flash'
-                ? `🧪 Simulasi model ${options.forceModelLabel} (backend tetap Gemini).\n\n${responseText}`
+            const responseText = await fetchAIResponse(lastPrompt, lastImageBase64, lastMimeType);
+            const renderedText = options.forceModelLabel && !['Gemini 2.5 Flash', 'ChatGPT'].includes(options.forceModelLabel)
+                ? `🧪 Simulasi model ${options.forceModelLabel} (backend fallback saat ini).\n\n${responseText}`
                 : responseText;
             
             document.getElementById(typingId).remove();
-            appendAIMessage(renderedText);
+            await appendAIMessageSmooth(renderedText);
             sendBtn.disabled = false;
             isGenerating = false;
             if (options.forceModelLabel) {
@@ -853,11 +965,12 @@
         // ----------------------------------------------------
         // LOGIKA CHAT & LLM INTEGRATION
         // ----------------------------------------------------
-        const apiKey = ""; 
         const chatInput = document.getElementById('chatInput');
         const sendBtn = document.getElementById('sendBtn');
         const chatMessages = document.getElementById('chatMessages');
         const chatBox = document.getElementById('chatBox');
+        const conversationHistory = [];
+        let lastRequestAt = 0;
 
         function scrollToBottom() {
             setTimeout(() => {
@@ -985,8 +1098,7 @@
                 .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
         }
 
-        function renderMarkdown(text) {
-            const safeText = escapeHtml((text || '').replace(/\r\n/g, '\n'));
+        function renderBasicMarkdown(safeText) {
             const lines = safeText.split('\n');
             const htmlParts = [];
             let inUl = false;
@@ -1063,17 +1175,56 @@
             return htmlParts.join('');
         }
 
-        function appendAIMessage(text) {
-            const formattedText = renderMarkdown(text);
+        function renderMarkdown(text) {
+            const safeText = escapeHtml((text || '').replace(/\r\n/g, '\n'));
+            const segments = [];
+            const codeRegex = /```([\w-]+)?\n?([\s\S]*?)```/g;
+            let lastIndex = 0;
+            let match;
+
+            while ((match = codeRegex.exec(safeText)) !== null) {
+                const [fullMatch, language = '', codeBody = ''] = match;
+                const start = match.index;
+                if (start > lastIndex) {
+                    segments.push({ type: 'markdown', value: safeText.slice(lastIndex, start) });
+                }
+                segments.push({ type: 'code', language: language.trim(), value: codeBody.replace(/\n$/, '') });
+                lastIndex = start + fullMatch.length;
+            }
+
+            if (lastIndex < safeText.length) {
+                segments.push({ type: 'markdown', value: safeText.slice(lastIndex) });
+            }
+
+            return segments.map((segment) => {
+                if (segment.type === 'code') {
+                    const language = segment.language || 'code';
+                    return `
+                        <div class="code-block-shell">
+                            <div class="code-block-nav">
+                                <span>${language}</span>
+                                <button onclick="copyCodeBlock(this)" class="code-block-copy-btn" title="Copy code" aria-label="Copy code">
+                                    <i data-lucide="copy" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                            <div class="code-scroll-wrap">
+                                <pre><code>${segment.value}</code></pre>
+                            </div>
+                        </div>
+                    `;
+                }
+                return renderBasicMarkdown(segment.value);
+            }).join('');
+        }
+
+        function createAIMessageShell() {
             const msgHTML = `
             <div class="flex gap-4">
                 <div class="w-8 h-8 md:w-10 md:h-10 shrink-0 rounded-full bg-slate-800 dark:bg-white flex items-center justify-center text-white dark:text-slate-900 shadow-sm mt-1 animate-fade-in-up">
                     <i data-lucide="bot" class="w-5 h-5"></i>
                 </div>
                 <div class="flex-1 pt-1.5 animate-wipe-reveal">
-                    <div class="prose prose-slate dark:prose-invert max-w-none text-slate-700 dark:text-gray-300 leading-relaxed text-[15px] message-content">
-                        ${formattedText}
-                    </div>
+                    <div class="prose prose-slate dark:prose-invert max-w-none text-slate-700 dark:text-gray-300 leading-relaxed text-[15px] message-content" data-ai-content></div>
                     <!-- Action Bar AI -->
                     <div class="flex items-center gap-1 mt-3 pt-2 text-slate-400 dark:text-slate-500">
                         <button onclick="copyMessage(this)" class="p-1.5 hover:text-blue-600 dark:hover:text-blue-400 transition-colors rounded-md hover:bg-slate-100 dark:hover:bg-white/5" title="Salin">
@@ -1091,48 +1242,79 @@
             chatMessages.insertAdjacentHTML('beforeend', msgHTML);
             lucide.createIcons();
             scrollToBottom();
+            return chatMessages.lastElementChild.querySelector('[data-ai-content]');
         }
 
-        async function fetchGeminiResponse(prompt, imageBase64, mimeType) {
-            if(!apiKey) {
-                return new Promise(resolve => {
-                    setTimeout(() => resolve("Sistem tersambung. Ini adalah balasan simulasi karena API Key belum dimasukkan."), 1500);
-                });
+        function appendAIMessage(text) {
+            const contentEl = createAIMessageShell();
+            contentEl.innerHTML = renderMarkdown(text);
+            scrollToBottom();
+        }
+
+        async function appendAIMessageSmooth(text) {
+            const contentEl = createAIMessageShell();
+            const normalized = text || '';
+            const step = normalized.length > 1600 ? 28 : 16;
+            let i = 0;
+
+            while (i < normalized.length) {
+                i = Math.min(i + step, normalized.length);
+                const partial = normalized.slice(0, i);
+                contentEl.innerHTML = `${renderMarkdown(partial)}<span class="typing-cursor">▍</span>`;
+                scrollToBottom();
+                await new Promise((resolve) => setTimeout(resolve, 20));
             }
 
-            const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-            try {
-                let parts = [];
-                if (prompt) parts.push({ text: prompt });
-                else if (!prompt && imageBase64) parts.push({ text: "Tolong jelaskan gambar ini secara detail." });
+            contentEl.innerHTML = renderMarkdown(normalized);
+            scrollToBottom();
+        }
 
-                if (imageBase64) {
-                    parts.push({
-                        inlineData: {
-                            mimeType: mimeType || "image/jpeg",
-                            data: imageBase64
-                        }
-                    });
-                }
+        function getActiveBackend() {
+            if (activeModelLabel === 'ChatGPT') return { endpoint: '/api/gpt', model: 'chatgpt-web', label: 'GPT' };
+            return { endpoint: '/api/chat', model: 'gemini-2.5-flash', label: 'Gemini' };
+        }
+
+        async function fetchAIResponse(prompt, imageBase64, mimeType) {
+            const { endpoint, model, label } = getActiveBackend();
+            try {
+                const images = imageBase64
+                    ? [`data:${mimeType || 'image/jpeg'};base64,${imageBase64}`]
+                    : [];
 
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: parts }] })
+                    body: JSON.stringify({
+                        prompt,
+                        images,
+                        history: conversationHistory.slice(-12),
+                        model,
+                    })
                 });
 
-                if (!response.ok) throw new Error('Network error');
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || `Backend ${label} error ${response.status}`);
+                }
                 const data = await response.json();
-                return data.candidates[0].content.parts[0].text;
+                return data.reply || data.msg || 'Model tidak mengembalikan balasan.';
             } catch (error) {
                 console.error('Error:', error);
-                return "Maaf, terjadi kesalahan pada jaringan.";
+                return `Maaf, backend ${label} sedang bermasalah: ${error.message || 'unknown error'}`;
             }
         }
 
         async function handleSend() {
             const text = chatInput.value.trim();
             if (!text && !attachedFile) return;
+            if (isGenerating) return;
+
+            const now = Date.now();
+            if (now - lastRequestAt < 1200) {
+                showToast('Tunggu sebentar sebelum mengirim lagi agar tidak spam.');
+                return;
+            }
+            lastRequestAt = now;
 
             const currentFile = attachedFile;
             const currentBase64 = base64Image;
@@ -1160,10 +1342,12 @@
             sendBtn.disabled = true;
             isGenerating = true;
 
-            const responseText = await fetchGeminiResponse(text, currentBase64, currentMime);
+            const responseText = await fetchAIResponse(text, currentBase64, currentMime);
             
             document.getElementById(typingId).remove();
-            appendAIMessage(responseText);
+            await appendAIMessageSmooth(responseText);
+            conversationHistory.push({ role: 'user', text: text || 'Analisa lampiran', images: currentBase64 ? [`data:${currentMime || 'image/jpeg'};base64,${currentBase64}`] : [] });
+            conversationHistory.push({ role: 'assistant', text: responseText, images: [] });
             sendBtn.disabled = false;
             isGenerating = false;
         }
