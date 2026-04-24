@@ -97,12 +97,57 @@
             overflow-x: auto;
             white-space: pre;
             max-width: 100%;
+            width: 100%;
             background: rgba(15, 23, 42, 0.9);
             color: #e2e8f0;
             border-radius: 0.75rem;
             padding: 0.85rem 1rem;
             margin: 0.9rem 0;
             border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+        .message-content {
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+        .message-content .code-block {
+            border-radius: 0.85rem;
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(15, 23, 42, 0.92);
+            margin: 0.9rem 0;
+        }
+        .message-content .code-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            padding: 0.45rem 0.65rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+            color: #cbd5e1;
+            font-size: 0.72rem;
+            letter-spacing: 0.04em;
+        }
+        .message-content .code-toolbar button {
+            border-radius: 0.45rem;
+            padding: 0.25rem;
+            color: #cbd5e1;
+            transition: all 0.2s ease;
+        }
+        .message-content .code-toolbar button:hover {
+            background: rgba(148, 163, 184, 0.18);
+            color: #fff;
+        }
+        .message-content .code-scroll {
+            overflow-x: auto;
+            max-width: 100%;
+        }
+        .message-content .code-scroll pre {
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            min-width: 100%;
+            width: max-content;
         }
         .message-content code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -324,9 +369,9 @@
             <div class="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
             Gemini 2.5 Flash
         </button>
-        <button onclick="selectModel('ChatGPT')" data-model-option="ChatGPT" class="flex items-center gap-3 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium">
+        <button onclick="selectModel('GPT')" data-model-option="GPT" class="flex items-center gap-3 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium">
             <div class="w-7 h-7 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4"></i></div>
-            ChatGPT
+            GPT
         </button>
         <button onclick="selectModel('DeepSeek')" data-model-option="DeepSeek" class="flex items-center gap-3 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-gray-300 font-medium">
             <div class="w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400"><i data-lucide="cpu" class="w-4 h-4"></i></div>
@@ -678,7 +723,8 @@
             if (modelPopupContext.source === 'response' && modelPopupContext.targetBtn) {
                 regenerateResponse(modelPopupContext.targetBtn, { forceModelLabel: modelName });
             } else {
-                showToast(`Model aktif: ${modelName}`);
+                const backendText = modelName.toLowerCase().includes('gpt') ? 'Backend GPT aktif.' : `Model aktif: ${modelName}`;
+                showToast(backendText);
             }
             closeModelPopup();
         };
@@ -731,6 +777,39 @@
             }, 1200);
         };
 
+        window.copyCodeBlock = async function(btn) {
+            const wrapper = btn.closest('.code-block');
+            const codeEl = wrapper?.querySelector('code');
+            const textToCopy = codeEl?.textContent?.trim();
+            if (!textToCopy) {
+                showToast("Kode tidak ditemukan.");
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(textToCopy);
+            } catch (_) {
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.top = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            }
+
+            btn.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-green-400"></i>';
+            lucide.createIcons();
+            setTimeout(() => {
+                btn.innerHTML = '<i data-lucide="copy" class="w-3.5 h-3.5"></i>';
+                lucide.createIcons();
+            }, 900);
+
+            showToast("Kode berhasil disalin.");
+        };
+
         // ----------------------------------------------------
         // LOGIKA EDIT TEKS PENGGUNA
         // ----------------------------------------------------
@@ -774,7 +853,7 @@
             isGenerating = true;
 
             const responseText = await fetchAIResponse(lastPrompt, lastImageBase64, lastMimeType);
-            const renderedText = options.forceModelLabel && !['Gemini 2.5 Flash', 'ChatGPT'].includes(options.forceModelLabel)
+            const renderedText = options.forceModelLabel && !['Gemini 2.5 Flash', 'GPT'].includes(options.forceModelLabel)
                 ? `🧪 Simulasi model ${options.forceModelLabel} (backend fallback saat ini).\n\n${responseText}`
                 : responseText;
             
@@ -1109,7 +1188,20 @@
 
             return segments.map((segment) => {
                 if (segment.type === 'code') {
-                    return `<pre><code>${segment.value}</code></pre>`;
+                    const languageLabel = segment.language || 'code';
+                    return `
+                        <div class="code-block">
+                            <div class="code-toolbar">
+                                <span>${languageLabel}</span>
+                                <button onclick="copyCodeBlock(this)" title="Salin kode">
+                                    <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                            <div class="code-scroll">
+                                <pre><code>${segment.value}</code></pre>
+                            </div>
+                        </div>
+                    `;
                 }
                 return renderBasicMarkdown(segment.value);
             }).join('');
@@ -1168,7 +1260,7 @@
         }
 
         function getActiveBackend() {
-            if (activeModelLabel === 'ChatGPT') return { endpoint: '/api/gpt', model: 'chatgpt-web' };
+            if (activeModelLabel.toLowerCase().includes('gpt')) return { endpoint: '/api/gpt', model: 'chatgpt-web' };
             return { endpoint: '/api/chat', model: 'gemini-2.5-flash' };
         }
 
