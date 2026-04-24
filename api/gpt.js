@@ -226,6 +226,27 @@ class ChatGpt {
     let finalText = '';
     let subtitle = null;
     let model = null;
+    let lastEventType = null;
+    let fallbackText = '';
+
+    const readText = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (Array.isArray(value)) return value.map((v) => readText(v)).join('');
+      if (typeof value !== 'object') return '';
+
+      const direct = [value.text, value.content, value.value]
+        .filter((v) => typeof v === 'string')
+        .join('');
+      if (direct) return direct;
+
+      return [
+        readText(value.message?.content?.parts),
+        readText(value.delta),
+        readText(value.parts),
+        readText(value.content?.parts),
+      ].join('');
+    };
 
     for await (const chunk of res.body) {
       buffer += decoder.decode(chunk, { stream: true });
@@ -236,7 +257,10 @@ class ChatGpt {
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (!data) continue;
-        if (data === '[DONE]') return { subtitle, model, msg: finalText };
+        if (data === '[DONE]') {
+          const msg = (finalText || fallbackText || '').trim();
+          return { subtitle, model, msg, eventType: lastEventType };
+        }
 
         let json;
         try {
@@ -247,17 +271,24 @@ class ChatGpt {
 
         if (json.type === 'title_generation') subtitle = json.title;
         if (json.type === 'server_ste_metadata') model = json.metadata?.model_slug;
+        if (json.type) lastEventType = json.type;
 
         const patches = Array.isArray(json.v) ? json.v : [];
         for (const p of patches) {
-          if (p.o === 'append' && p.p?.includes('/message/content/parts/0')) {
+          if (p.o === 'append' && p.p?.includes('/message/content/parts/')) {
             finalText += p.v || '';
           }
+        }
+
+        if (!finalText) {
+          const eventText = readText(json);
+          if (eventText) fallbackText += eventText;
         }
       }
     }
 
-    return { subtitle, model, msg: finalText };
+    const msg = (finalText || fallbackText || '').trim();
+    return { subtitle, model, msg, eventType: lastEventType };
   }
 }
 
@@ -312,7 +343,23 @@ export default async function handler(req, res) {
 
     const client = new ChatGpt();
     const result = await client.startConversation(safePrompt, Boolean(web));
-    return res.status(200).json({ reply: result.msg || '', subtitle: result.subtitle || null, model: result.model || 'chatgpt-web' });
+    const cleanReply = String(result.msg || '').trim();
+    if (!cleanReply) {
+      return res.status(200).json({
+        reply: 'Balasan model kosong. Silakan ulangi pertanyaan dengan lebih spesifik.',
+        reason: 'EMPTY_MODEL_OUTPUT',
+        subtitle: result.subtitle || null,
+        model: result.model || 'chatgpt-web',
+        eventType: result.eventType || null,
+      });
+    }
+
+    return res.status(200).json({
+      reply: cleanReply,
+      subtitle: result.subtitle || null,
+      model: result.model || 'chatgpt-web',
+      eventType: result.eventType || null,
+    });
   } catch (error) {
     console.error('gpt handler error', error);
     return res.status(500).json({ error: error.message || 'Internal Server Error' });
