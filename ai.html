@@ -1282,12 +1282,25 @@
                     })
                 });
 
-                if (!response.ok) throw new Error(`Network error ${response.status}`);
                 const data = await response.json();
-                return data.reply || data.msg || 'Model tidak mengembalikan balasan.';
+                if (!response.ok) {
+                    throw new Error(data?.error || `Network error ${response.status}`);
+                }
+
+                const reply = typeof data.reply === 'string' ? data.reply.trim() : '';
+                if (reply) return reply;
+
+                const fallback = typeof data.msg === 'string' ? data.msg.trim() : '';
+                if (fallback) return fallback;
+
+                if (typeof data.error === 'string' && data.error.trim()) {
+                    return `Maaf, terjadi kesalahan: ${data.error.trim()}`;
+                }
+
+                return 'Balasan model kosong. Coba ulangi pertanyaan dengan lebih spesifik.';
             } catch (error) {
                 console.error('Error:', error);
-                return "Maaf, terjadi kesalahan pada jaringan.";
+                return `Maaf, terjadi kesalahan: ${error.message || 'jaringan bermasalah.'}`;
             }
         }
 
